@@ -15,6 +15,10 @@ extern volatile uint32_t* baza_lapic_wirtualna;
 // Połączenie z GUI (Zarządca Okien)
 extern "C" bool zaktualizuj_klawiature_gui(char znak);
 
+extern "C" bool gui_surface_has_keyboard();
+extern "C" void lx_display_post_scancode(uint8_t scancode);
+extern "C" void lx_keyboard_ready();
+
 // Wewnętrzny bufor dla terminala Ring 3
 #define ROZMIAR_BUFORA 256
 static char bufor_klawiatury[ROZMIAR_BUFORA];
@@ -55,6 +59,7 @@ static void zglos_bajt_do_systemu(uint8_t bajt) {
         if (nastepna_glowa != bufor_ogon) {
             bufor_klawiatury[bufor_glowa] = (char)bajt;
             bufor_glowa = nastepna_glowa;
+            lx_keyboard_ready();
         }
     }
 }
@@ -62,6 +67,11 @@ static void zglos_bajt_do_systemu(uint8_t bajt) {
 // GŁÓWNA FUNKCJA PRZERWANIA - Dopasowana nazwa (snake_case) do idt.cpp!
 extern "C" void obsluga_przerwania_klawiatury() {
     uint8_t scancode = wejscie_port_bajt(0x60);
+
+    if (gui_surface_has_keyboard()) {
+        lx_display_post_scancode(scancode);
+        return;
+    }
 
     // Sprzętowe kody rozszerzone (np. strzałki, Prawy Alt) zaczynają się od 0xE0
     if (scancode == 0xE0) {

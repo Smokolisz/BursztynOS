@@ -25,4 +25,10 @@ SECTIONS
         KEEP(*(COMMON))
         . = ALIGN(4096);
     }
+
+    /DISCARD/ : {
+        *(.note*)
+        *(.comment)
+        *(.eh_frame*)
+    }
 }

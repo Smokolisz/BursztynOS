@@ -35,6 +35,8 @@ struct tss_wpis {
 // Globalna instancja TSS, która będzie osadzona w naszym systemie
 struct tss_wpis globalny_tss;
 
+alignas(16) static uint8_t double_fault_stack[16384];
+
 /*
  * Konfiguruje TSS ładując podany na wejściu adres szczytu stosu jądra (ring 0) 
  * tak, aby sprzęt wiedział jak dokonać zrzutu środowiska podczas zmiany pierścieni.
@@ -48,6 +50,7 @@ extern "C" void inicjalizuj_tss(void* stos_jadra) {
     }
 
     globalny_tss.rsp0 = (uint64_t)stos_jadra;
+    globalny_tss.ist1 = (uint64_t)double_fault_stack + sizeof(double_fault_stack);
     
     // Blokujemy mechanizm nadpisywania portów z Ring 3 (brak mapy wejścia/wyjścia)
     // Offset ustawiony na rozmiar całego obiektu oznacza brak mapy w ciele za strukturą.
@@ -57,6 +60,10 @@ extern "C" void inicjalizuj_tss(void* stos_jadra) {
 /*
  * Zewnętrzna, wygodna funkcja dla jądra do załadowania Task Registera w procesorze
  */
+extern "C" void tss_set_kernel_stack(uint64_t top) {
+    globalny_tss.rsp0 = top;
+}
+
 extern "C" void zaladuj_tss(uint16_t selektor_tss) {
     asm volatile("ltr %0" : : "rm"(selektor_tss));
 }

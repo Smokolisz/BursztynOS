@@ -44,6 +44,11 @@ header_start:
     .long 12
     .long MULTIBOOT_TAG_TYPE_MEMORY_MAP
 
+    .align 8
+    .short 6
+    .short 0
+    .long 8
+
     /* Znacznik końcowy Multiboot2 */
     .align 8
     .short MULTIBOOT_HEADER_TAG_END
@@ -61,7 +66,7 @@ pml4_table:
 pdp_table:
     .skip 4096
 pd_table:
-    .skip 4096
+    .skip 4096 * 4
 
 /* Stos systemowy wyrównany do 16 bajtów (Wymóg System V ABI) */
 .align 16
@@ -99,13 +104,26 @@ _start:
     orl $0b11, %eax
     movl %eax, pml4_table
 
-    movl $pd_table, %eax
+    xorl %ecx, %ecx
+1:
+    movl %ecx, %eax
+    shll $12, %eax
+    addl $pd_table, %eax
     orl $0b11, %eax
-    movl %eax, pdp_table
+    movl %eax, pdp_table(,%ecx,8)
+    incl %ecx
+    cmpl $4, %ecx
+    jne 1b
 
-    movl $0x0, %eax
+    xorl %ecx, %ecx
+2:
+    movl %ecx, %eax
+    shll $21, %eax
     orl $0b10000011, %eax
-    movl %eax, pd_table
+    movl %eax, pd_table(,%ecx,8)
+    incl %ecx
+    cmpl $2048, %ecx
+    jne 2b
 
     /* Przypisanie bazy stron do rejestru CR3 */
     movl $pml4_table, %eax

@@ -123,6 +123,7 @@ ISR_BEZKODUBLEDU 44
 ISR_BEZKODUBLEDU 45
 ISR_BEZKODUBLEDU 46
 ISR_BEZKODUBLEDU 47
+ISR_BEZKODUBLEDU 255
 
 /*
  * PUSH-ALL (Zrzucenie pełnego środowiska do stosu by ochronić stan przed utratą z powodu obsługi wyjątku w C++)
@@ -158,6 +159,8 @@ wspolne_isr_wejscie:
     call WspolnaObslugaPrzerwan
 
     /* Po udanym zakończeniu operacji zdejmij wszystko używając procedur od tyłu (POP-ALL) */
+.global interrupt_return
+interrupt_return:
     popq %r15
     popq %r14
     popq %r13

@@ -1,62 +1,102 @@
-# Narzędzia kompilacji
-CXX = x86_64-linux-gnu-g++
-AS = x86_64-linux-gnu-as
-LD = x86_64-linux-gnu-ld
-OBJCOPY = x86_64-linux-gnu-objcopy
+CROSS_PREFIX := $(if $(shell command -v x86_64-linux-gnu-as 2>/dev/null),x86_64-linux-gnu-,)
+CXX := $(CROSS_PREFIX)g++
+AS := $(CROSS_PREFIX)as
+LD := $(CROSS_PREFIX)ld
+OBJCOPY := $(CROSS_PREFIX)objcopy
 
-# Flagi kompilatora C++ (Freestanding, brak standardowej biblioteki)
-CXXFLAGS = -ffreestanding -O2 -Wall -Wextra -fno-exceptions -fno-rtti -mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2
+BUILD := build
+KERNEL := $(BUILD)/system_operacyjny.bin
+DESKTOP_ISO := $(BUILD)/BursztynOS.iso
+REAPER_ISO := $(BUILD)/BursztynOS-REAPER.iso
+ROOTFS := $(BUILD)/rootfs.img
+DISK := $(BUILD)/wirtualny_dysk.img
 
-# Lista wszystkich skompilowanych obiektów jądra (BEZ KALKULATORA!)
-OBJS = boot.o gdt.o tss.o apic.o idt.o przerwania.o klawiatura.o mysz.o zegar-rtc.o pmm.o vmm.o psf.o grafika.o syscall.o syscalls.o pci.o ahci.o ring3.o loader.o kernel.o shell_blob.o
+KERNEL_FLAGS := -ffreestanding -O2 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
+	-fno-stack-protector -fno-pie -fno-pic -fcf-protection=none -fno-asynchronous-unwind-tables \
+	-mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -I.
+LEGACY_FLAGS := $(KERNEL_FLAGS) -std=gnu++20 -w
+LINUX_FLAGS := $(KERNEL_FLAGS) -std=c++20 -Wall -Wextra -Wno-unused-parameter -Ilinux
 
-# Główny cel domyślny
-all: system_operacyjny.bin
+LEGACY_OBJECTS := $(addprefix $(BUILD)/, boot.o gdt.o tss.o apic.o idt.o przerwania.o klawiatura.o mysz.o \
+	zegar-rtc.o pmm.o vmm.o psf.o grafika.o syscalls.o pci.o ahci.o ring3.o loader.o kernel.o shell_blob.o)
+LINUX_OBJECTS := $(addprefix $(BUILD)/linux/, base.o sched.o vfs.o mm.o process.o futex.o signal.o syscalls.o \
+	devices.o kernel_api.o entry.o)
+HEADERS := $(wildcard *.h linux/*.h)
 
-# Reguły kompilacji dla plików C++ (.cpp do .o)
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+QEMU := qemu-system-x86_64
+QEMU_MACHINE := -m 3G -vga std -serial stdio -device ahci,id=ahci
+QEMU_ACCEL := $(if $(wildcard /dev/kvm),-enable-kvm -cpu host,-cpu max)
 
-# Reguły kompilacji dla plików Asemblera (.S do .o)
-%.o: %.S
+.PHONY: all iso run reaper reaper-iso clear clean cdysk
+
+all: $(KERNEL)
+
+$(BUILD)/%.o: %.cpp $(HEADERS) | $(BUILD)/linux
+	$(CXX) $(LEGACY_FLAGS) -c $< -o $@
+
+$(BUILD)/%.o: %.S | $(BUILD)/linux
 	$(AS) -c $< -o $@
 
-# === BUDOWANIE POWŁOKI BURSZTYNA (RING 3) ===
-shell_tmp.o: shell.cpp
-	$(CXX) $(CXXFLAGS) -fno-pie -c shell.cpp -o shell_tmp.o
+$(BUILD)/linux/%.o: linux/%.cpp $(HEADERS) | $(BUILD)/linux
+	$(CXX) $(LINUX_FLAGS) -c $< -o $@
 
-shell_blob.o: shell_tmp.o
-	$(LD) -T shell_linker.ld -nostdlib -no-pie shell_tmp.o -o shell.elf
-	$(OBJCOPY) -O binary shell.elf shell.bin
-	$(LD) -r -b binary shell.bin -o shell_blob.o
+$(BUILD)/linux/%.o: linux/%.S | $(BUILD)/linux
+	$(AS) -c $< -o $@
 
-# === KONSOLIDACJA JĄDRA ===
-system_operacyjny.bin: $(OBJS)
-	$(CXX) -T linker.ld -nostdlib -no-pie -z noexecstack -o system_operacyjny.bin $(OBJS) -lgcc
+$(BUILD)/linux:
+	mkdir -p $@
 
-# === BUDOWANIE OBRAZU ISO I KONFIGURACJA GRUB-A ===
-iso: system_operacyjny.bin
-	mkdir -p isodir/boot/grub
-	cp system_operacyjny.bin isodir/boot/
-	echo 'set timeout=0' > isodir/boot/grub/grub.cfg
-	echo 'set default=0' >> isodir/boot/grub/grub.cfg
-	echo 'menuentry "Bursztyn OS" {' >> isodir/boot/grub/grub.cfg
-	echo '    insmod all_video' >> isodir/boot/grub/grub.cfg
-	echo '    set gfxpayload=keep' >> isodir/boot/grub/grub.cfg
-	echo '    multiboot2 /boot/system_operacyjny.bin' >> isodir/boot/grub/grub.cfg
-	echo '    boot' >> isodir/boot/grub/grub.cfg
-	echo '}' >> isodir/boot/grub/grub.cfg
-	grub-mkrescue -o BursztynOS.iso isodir --xorriso=xorriso
+$(BUILD)/shell_tmp.o: shell.cpp | $(BUILD)/linux
+	$(CXX) $(LEGACY_FLAGS) -c $< -o $@
 
-# === URUCHOMIENIE W QEMU ===
-run: iso
-	if [ ! -f wirtualny_dysk.img ]; then qemu-img create -f raw wirtualny_dysk.img 40M; fi
-	if [ -f tapeta.bmp ]; then dd if=tapeta.bmp of=wirtualny_dysk.img bs=512 seek=10 conv=notrunc; fi
-	qemu-system-x86_64 -cdrom BursztynOS.iso -drive id=disk,file=wirtualny_dysk.img,format=raw,if=none -device ahci,id=ahci -device ide-hd,drive=disk,bus=ahci.0 -m 2G -vga std -serial stdio
+$(BUILD)/shell.bin: $(BUILD)/shell_tmp.o shell_linker.ld
+	$(LD) -T shell_linker.ld -nostdlib -no-pie $< -o $(BUILD)/shell.elf
+	$(OBJCOPY) -O binary $(BUILD)/shell.elf $@
 
-# === CZYSZCZENIE PROJEKTU ===
-clear:
-	rm -f *.o *.bin *.elf *.iso
-	rm -rf isodir
+$(BUILD)/shell_blob.o: $(BUILD)/shell.bin
+	cd $(BUILD) && $(LD) -r -b binary shell.bin -o shell_blob.o
+
+$(KERNEL): $(LEGACY_OBJECTS) $(LINUX_OBJECTS) linker.ld
+	$(CXX) -T linker.ld -nostdlib -no-pie -z noexecstack -o $@ $(LEGACY_OBJECTS) $(LINUX_OBJECTS) -lgcc
+
+define make_iso
+	rm -rf $(BUILD)/isodir
+	mkdir -p $(BUILD)/isodir/boot/grub
+	cp $(KERNEL) $(BUILD)/isodir/boot/
+	$(if $(2),ln $(ROOTFS) $(BUILD)/isodir/boot/rootfs.img)
+	printf '%s\n' 'set timeout=0' 'set default=0' 'menuentry "Bursztyn OS" {' \
+		'    insmod all_video' '    set gfxpayload=keep' \
+		'    multiboot2 /boot/system_operacyjny.bin $(2)' \
+		$(if $(2),'    module2 /boot/rootfs.img') '    boot' '}' > $(BUILD)/isodir/boot/grub/grub.cfg
+	grub-mkrescue -o $(1) $(BUILD)/isodir --xorriso=xorriso
+endef
+
+iso: $(DESKTOP_ISO)
+
+$(DESKTOP_ISO): $(KERNEL)
+	$(call make_iso,$@,)
+
+$(DISK): | $(BUILD)/linux
+	qemu-img create -f raw $@ 40M
+	dd if=tapeta.bmp of=$@ bs=512 seek=10 conv=notrunc
+
+QEMU_DISK = -drive id=disk,file=$(DISK),format=raw,if=none -device ide-hd,drive=disk,bus=ahci.0
+
+run: $(DESKTOP_ISO) $(DISK)
+	$(QEMU) $(QEMU_ACCEL) $(QEMU_MACHINE) $(QEMU_DISK) -cdrom $(DESKTOP_ISO)
+
+include reaper/reaper.mk
+
+reaper-iso: $(REAPER_ISO)
+
+$(REAPER_ISO): $(KERNEL) $(ROOTFS)
+	$(call make_iso,$@,autostart=reaper $(KERNEL_ARGS))
+
+reaper: $(REAPER_ISO) $(DISK)
+	$(QEMU) $(QEMU_ACCEL) $(QEMU_MACHINE) $(QEMU_DISK) -cdrom $(REAPER_ISO)
+
+clean clear:
+	rm -rf $(BUILD)/*.o $(BUILD)/linux $(BUILD)/*.bin $(BUILD)/*.elf $(BUILD)/*.iso $(BUILD)/isodir
+
 cdysk:
-	rm -rf wirtualny_dysk.img
+	rm -f $(DISK)
