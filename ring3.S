@@ -8,10 +8,9 @@
 .code64
 
 /*
- * extern "C" void przejdz_do_ring3(uint64_t rip, uint64_t rsp, bool z_syscalla);
+ * extern "C" void przejdz_do_ring3(uint64_t rip, uint64_t rsp);
  * RDI = Punkt wejścia (RIP z loadera)
  * RSI = Wirtualny szczyt stosu Ring 3 (RSP z loadera)
- * RDX = flaga z_syscalla (1 = wykonaj swapgs, 0 = nie wykonuj)
  */
 przejdz_do_ring3:
     mov $0x1B, %ax
@@ -31,9 +30,4 @@ przejdz_do_ring3:
     pushq $0x23      
     pushq %rdi       
 
-    /* TESTUJ CZY WYMAGANY JEST SWAPGS PRZED SKOKIEM */
-    test %rdx, %rdx
-    jz brak_swapgs
-    swapgs
-brak_swapgs:
     iretq

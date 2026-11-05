@@ -6,6 +6,8 @@
 
 #include <stdint.h>
 
+extern "C" uint32_t lx_timer_ticks_per_ms(volatile uint32_t* lapic);
+
 static inline void wyjscie_port_bajt(uint16_t port, uint8_t wartosc) {
     asm volatile ("outb %0, %1" : : "a"(wartosc), "Nd"(port));
 }
@@ -62,9 +64,11 @@ extern "C" void inicjalizuj_apic() {
     baza_lapic_wirtualna[APIC_SPURIOUS_INT_REGISTER / 4] = 255 | 0x100;
 
     // Timer APIC na wektorze 32
-    baza_lapic_wirtualna[APIC_TIMER_LVT_REGISTER / 4] = 32 | 0x20000;
     baza_lapic_wirtualna[APIC_TIMER_DIVIDE_CONFIG / 4] = 0x3;
-    baza_lapic_wirtualna[APIC_TIMER_INITIAL_COUNT / 4] = 0x05FFFFFF;
+    baza_lapic_wirtualna[APIC_TIMER_LVT_REGISTER / 4] = 32 | 0x10000;
+    const uint32_t ticks_per_ms = lx_timer_ticks_per_ms(baza_lapic_wirtualna);
+    baza_lapic_wirtualna[APIC_TIMER_LVT_REGISTER / 4] = 32 | 0x20000;
+    baza_lapic_wirtualna[APIC_TIMER_INITIAL_COUNT / 4] = ticks_per_ms;
 
     // --- NOWE: Inicjalizacja routingu wejścia z urządzeń w IOAPIC ---
     baza_ioapic_wirtualna = (volatile uint32_t*)0xFEC00000; // Standardowy fizyczny adres chipsetu IOAPIC

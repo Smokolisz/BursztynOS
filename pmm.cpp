@@ -15,6 +15,32 @@
 uint8_t mapa_bitowa[MAX_RAMEK / 8];
 uint64_t najwyzsza_znaleziona_ramka = 0;
 
+static uint64_t first_candidate_frame = 0;
+static uint64_t free_frames = 0;
+static uint64_t total_frames = 0;
+
+struct MultibootModuleTag {
+    uint32_t type;
+    uint32_t size;
+    uint32_t start;
+    uint32_t end;
+};
+
+static void reserve_boot_modules(uint64_t info) {
+    constexpr uint32_t kTagModule = 3;
+    const uint32_t total = *reinterpret_cast<uint32_t*>(info);
+    for (uint64_t offset = 8; offset < total;) {
+        auto* tag = reinterpret_cast<MultibootModuleTag*>(info + offset);
+        if (!tag->type) break;
+        if (tag->type == kTagModule) {
+            for (uint64_t address = tag->start & ~0xFFFULL; address < tag->end; address += ROZMIAR_RAMKI) {
+                ZabezpieczRamke(address);
+            }
+        }
+        offset += (tag->size + 7) & ~7ULL;
+    }
+}
+
 /*
  * Operacje bitowe
  */
@@ -122,25 +148,60 @@ void InicjalizujPMM(uint64_t adres_info_multiboot) {
     // Blokujemy obszar APIC MMIO 0xFEE00000 (Zaraz pod granicą 4GB)
     ZabezpieczRamke(0xFEE00000);
     ZabezpieczRamke(0xFEC00000);
+
+    reserve_boot_modules(adres_info_multiboot);
+
+    if (najwyzsza_znaleziona_ramka > MAX_RAMEK) najwyzsza_znaleziona_ramka = MAX_RAMEK;
+    for (uint64_t ramka = 0; ramka < najwyzsza_znaleziona_ramka; ramka++) {
+        if (CzyRamkaWolna(ramka * ROZMIAR_RAMKI)) free_frames++;
+    }
+    total_frames = free_frames;
 }
 
 // Wydziel z puli
 void* ZaalokujRamke() {
-    // Proste szukanie sekwencyjne (tzw. First-Fit) pierwszego bitu == 1
-    for (uint64_t i = 0; i <= najwyzsza_znaleziona_ramka; i++) {
+    for (uint64_t i = first_candidate_frame; i < najwyzsza_znaleziona_ramka;) {
         uint64_t indeks_bajtu = i / 8;
-        uint8_t  indeks_bitu  = i % 8;
-
+        if (!mapa_bitowa[indeks_bajtu]) {
+            i = (indeks_bajtu + 1) * 8;
+            continue;
+        }
+        uint8_t indeks_bitu = i % 8;
         if (mapa_bitowa[indeks_bajtu] & (1 << indeks_bitu)) {
-            // Znaleźliśmy 1. Ustaw na 0 = Zajęte
             mapa_bitowa[indeks_bajtu] &= ~(1 << indeks_bitu);
+            first_candidate_frame = i + 1;
+            free_frames--;
             return (void*)(i * ROZMIAR_RAMKI);
         }
+        i++;
     }
     return nullptr; // Out of Memory (OOM)
 }
 
+extern "C" void* ZaalokujRamkeC() { return ZaalokujRamke(); }
+extern "C" void ZwolnijRamkeC(void* phys) { ZwolnijRamke(phys); }
+extern "C" uint64_t pmm_free_frames() { return free_frames; }
+extern "C" uint64_t pmm_total_frames() { return total_frames; }
+
+extern "C" uint64_t pmm_alloc_contiguous(uint64_t count) {
+    uint64_t run = 0;
+    for (uint64_t frame = 0; frame < najwyzsza_znaleziona_ramka; frame++) {
+        run = CzyRamkaWolna(frame * ROZMIAR_RAMKI) ? run + 1 : 0;
+        if (run == count) {
+            const uint64_t start = frame + 1 - count;
+            for (uint64_t i = start; i <= frame; i++) ZabezpieczRamke(i * ROZMIAR_RAMKI);
+            free_frames -= count;
+            return start * ROZMIAR_RAMKI;
+        }
+    }
+    return 0;
+}
+
 // Przekaż do puli
 void ZwolnijRamke(void* adres_fizyczny) {
-    OdblokujRamke((uint64_t)adres_fizyczny);
+    const uint64_t adres = (uint64_t)adres_fizyczny;
+    if (CzyRamkaWolna(adres)) return;
+    OdblokujRamke(adres);
+    free_frames++;
+    if (adres / ROZMIAR_RAMKI < first_candidate_frame) first_candidate_frame = adres / ROZMIAR_RAMKI;
 }

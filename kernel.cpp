@@ -11,6 +11,8 @@
 #include "grafika.h" // PODŁĄCZENIE GRAFIKI
 #include "loader.h"  // Zapewnia dostęp do Loadera programów .bur
 #include "ahci.h"    // STEROWNIK DYSKU
+#include "linux/base.h"
+#include "linux/kernel_api.h"
 
 // Deklaracje zewnętrznych procedur asemblerowych i systemowych
 extern "C" void InicjalizujGDT();
@@ -40,7 +42,13 @@ extern "C" uint8_t _binary_shell_bin_start[];
 extern "C" uint8_t _binary_shell_bin_end[];
 
 // Prototyp funkcji uruchamiającej program z uwzględnieniem Systemu Uprawnień PZB oraz flagi z_syscalla
-extern "C" bool bws_uruchom_program_z_pliku(const char* sciezka, uint8_t bzl_poziom, uint64_t flagi_praw, bool z_syscalla);
+extern "C" bool bws_uruchom_program_z_pliku(const char* sciezka, uint8_t bzl_poziom, uint64_t flagi_praw);
+extern "C" void* PobierzAktualnePML4();
+
+static void shell_task(void*) {
+    bws_uruchom_program_z_pliku("/shell.bur", 4, 0xFFFFFFFF);
+    for (;;) asm volatile("hlt");
+}
 
 void UIntToStr(uint64_t wartosc, char* bufor) {
     if (wartosc == 0) { bufor[0] = '0'; bufor[1] = '\0'; return; }
@@ -58,8 +66,12 @@ void ZlaczStringi(char* cel, const char* str1, const char* str2, const char* str
     cel[i] = '\0';
 }
 
-extern "C" void kernel_main(uint64_t multiboot_magic, uint64_t multiboot_info_ptr) {
+extern "C" void kernel_main(uint64_t multiboot_magic, uint64_t bootloader_info) {
     if (multiboot_magic != 0x36D76289) return; 
+
+    lx::boot_capture(bootloader_info);
+    const uint64_t multiboot_info_ptr = reinterpret_cast<uint64_t>(lx::boot_info());
+    lx::cpu_init();
 
     InicjalizujPMM(multiboot_info_ptr);
     InicjalizujGDT();
@@ -86,6 +98,8 @@ extern "C" void kernel_main(uint64_t multiboot_magic, uint64_t multiboot_info_pt
 
     inicjalizuj_apic();
     WypiszLog("[APIC] Kontroler przerwan (LAPIC/IOAPIC) uruchomiony.");
+    lx::clock_init();
+    lx_init(reinterpret_cast<uint64_t>(PobierzAktualnePML4()));
     InicjalizujMyszPS2();
     WypiszLog("[I/O] Sterowniki Mysz i Klawiatura (PS/2) gotowe.");
     WypiszLog("[BWS] API Wywolan Systemowych gotowe.");
@@ -119,18 +133,12 @@ extern "C" void kernel_main(uint64_t multiboot_magic, uint64_t multiboot_info_pt
     WypiszLog("--------------------------------------------------");
     WypiszLog("System operacyjny gotowy!");
 
-    asm volatile("sti");
-
     usun_twor("/shell.bur"); 
     utworz_plik("/shell.bur");
     uint64_t shell_rozmiar = (uint64_t)(_binary_shell_bin_end - _binary_shell_bin_start);
     zapisz_do_pliku("/shell.bur", (const char*)_binary_shell_bin_start, shell_rozmiar);
     WypiszLog("[BSP] Wbudowana Powloka gotowa do odczytu z dysku.");
 
-    // UWAGA: Przekazujemy FALSE, ponieważ nie uruchamiamy tego z wnętrza procedury Syscall, lecz bezpośrednio z jądra!
-    bws_uruchom_program_z_pliku("/shell.bur", 4, 0xFFFFFFFF, false);
-
-    while (true) {
-        asm volatile ("hlt");
-    }
+    lx_start_shell(shell_task);
+    lx_run();
 }

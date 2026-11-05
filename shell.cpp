@@ -186,6 +186,7 @@ extern "C" void _start() {
             print("  wersja        - wersja powloki i OS\n");
             print("  kto           - zalogowany uzytkownik\n");
             print("  pci           - WYŚWIETLA URZĄDZENIA NA PŁYCIE GŁÓWNEJ\n");
+            print("  reaper        - launches REAPER\n");
             print("  uruchom [plik]- URUCHAMIA APLIKACJE (np. uruchom /programy/kalk.bur)\n");
             print("  historia      - ostatnie 5 polecen\n");
             print("  czysc         - czysci ekran terminala\n");
@@ -201,6 +202,9 @@ extern "C" void _start() {
             print("  pisz [txt]    - powtarza tekst\n");
             print("  cytat         - wczytuje cytaty z pliku\n");
             print("  losuj         - rzuca koscia (1-6)\n");
+        }
+        else if (strcmp(bufor_komendy, "reaper")) {
+            if (bws_wywolaj(11) == 0) print("REAPER is not available in this boot image.\n");
         }
         else if (strcmp(bufor_komendy, "system")) {
             print("OS: Bursztyn OS x86_64\nJadro: Monolityczne, VMM Paging 4-lvl\n");

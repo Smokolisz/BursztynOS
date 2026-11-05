@@ -54,4 +54,5 @@ SECTIONS
     /* Symbol oznaczający fizyczny koniec jądra w pamięci RAM (Po wyrównaniu do rozmiaru strony 4K) */
     . = ALIGN(4K);
     __kernel_end = .;
+    ASSERT(__kernel_end <= 0x400000, "kernel image must stay below 4 MiB")
 }

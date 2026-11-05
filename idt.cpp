@@ -14,6 +14,11 @@ extern "C" void obsluga_przerwania_klawiatury();
 extern "C" void obsluga_przerwania_myszy();
 extern "C" void obsluga_przerwania_zegara();
 
+namespace lx { struct InterruptFrame; }
+extern "C" bool lx_handle_exception(lx::InterruptFrame* frame);
+extern "C" void lx_on_timer_interrupt(lx::InterruptFrame* frame);
+extern "C" void isr255();
+
 struct DeskryptorIDT {
     uint16_t offset_czesc1;
     uint16_t selektor_kodu;
@@ -64,7 +69,14 @@ void UintDoHexStr(uint64_t wartosc, char* bufor) {
 }
 
 extern "C" void WspolnaObslugaPrzerwan(struct RejestryStanowe* stan) {
+    constexpr uint64_t kSpuriousVector = 255;
+    constexpr uint32_t kClockRedrawTicks = 250;
+    static uint32_t ticks_until_clock_redraw = 1;
+
+    if (stan->wektor_przerwania == kSpuriousVector) return;
+
     if (stan->wektor_przerwania < 32) {
+        if (lx_handle_exception(reinterpret_cast<lx::InterruptFrame*>(stan))) return;
         wypisz_na_ekranie("\n========================================================\n");
         wypisz_na_ekranie("  KRYTYCZNY BLAD SYSTEMU (BSOD) - WYJATEK PROCESORA!\n");
         wypisz_na_ekranie("========================================================\n");
@@ -90,7 +102,10 @@ extern "C" void WspolnaObslugaPrzerwan(struct RejestryStanowe* stan) {
     if (stan->wektor_przerwania >= 32) {
         // Dyspozytor po nowemu (snake_case)
         if (stan->wektor_przerwania == 32) {
-            obsluga_przerwania_zegara();
+            if (--ticks_until_clock_redraw == 0) {
+                ticks_until_clock_redraw = kClockRedrawTicks;
+                obsluga_przerwania_zegara();
+            }
         } 
         else if (stan->wektor_przerwania == 33) {
             obsluga_przerwania_klawiatury();
@@ -102,6 +117,10 @@ extern "C" void WspolnaObslugaPrzerwan(struct RejestryStanowe* stan) {
         if(baza_lapic_wirtualna) {
             baza_lapic_wirtualna[LAPIC_EOI_OFFSET / 4] = 0;
         }
+
+        if (stan->wektor_przerwania == 32) {
+            lx_on_timer_interrupt(reinterpret_cast<lx::InterruptFrame*>(stan));
+        }
     }
 }
 
@@ -112,5 +131,7 @@ extern "C" void InicjalizujIDT() {
     for (int i = 0; i < 48; i++) {
         UstawWpisIDT(i, tablica_isr[i], 0x8E);
     }
+    UstawWpisIDT(255, reinterpret_cast<uint64_t>(isr255), 0x8E);
+    tablica_idt[8].interrupt_stack = 1;
     zaladuj_zaktualizowane_idt((uint64_t)&wskaznik_idtr);
 }

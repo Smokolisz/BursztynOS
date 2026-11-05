@@ -23,16 +23,11 @@ extern "C" {
     bool usun_twor(const char* sciezka);
     bool zmien_nazwe_tworu(const char* sciezka, const char* nowa_nazwa);
     bool bws_uruchom_program_z_pliku(const char* sciezka_pliku, uint8_t bzl_poziom, uint64_t flagi_praw);
+    bool lx_launch_reaper();
+    void lx_wait_for_keyboard();
 }
 
-// Zewnetrzny odnosnik do punktu wejsciowego SYSCALL zakodowanego w Asemblerze
-extern "C" void brama_wywolan_systemowych();
-
-// Zewnetrzny adres ze strefy linkera symbolizujacy srodek stosu Ring 0
-extern "C" uint64_t stack_top;
-
-// Globalna zmienna przechowujaca wskaznik na rdzenny stos.
-uint64_t bezpieczny_stos_jadra;
+extern "C" void syscall_entry();
 
 // Pomocnicza funkcja przestrzeni zapisujacej do Model Specific Registers (MSR)
 static inline void zapisz_msr(uint32_t msr, uint64_t wartosc) {
@@ -53,11 +48,8 @@ extern "C" void inicjalizuj_syscalls() {
 
     uint32_t star_gorny = (0x13 << 16) | 0x08; 
     zapisz_msr(0xC0000081, ((uint64_t)star_gorny << 32));
-    zapisz_msr(0xC0000082, (uint64_t)&brama_wywolan_systemowych);
-    zapisz_msr(0xC0000084, 0x200);
-
-    bezpieczny_stos_jadra = (uint64_t)&stack_top;
-    zapisz_msr(0xC0000102, (uint64_t)&bezpieczny_stos_jadra);
+    zapisz_msr(0xC0000082, (uint64_t)&syscall_entry);
+    zapisz_msr(0xC0000084, 0x44700);
 }
 
 // Pomocnicza funkcja dla Jadra, przydatna przy ochronie katalogow systemowych
@@ -121,7 +113,9 @@ extern "C" uint64_t obsluga_wywolan_systemowych(uint64_t nr_funkcji, uint64_t ar
         }
         case 4: {
             // sys_pobierz_znak()
-            kod_wyniku = (uint64_t)pobierz_znak_klawiatury();
+            char znak;
+            while (!(znak = pobierz_znak_klawiatury())) lx_wait_for_keyboard();
+            kod_wyniku = (uint64_t)znak;
             break;
         }
         case 5: {
@@ -208,6 +202,11 @@ extern "C" uint64_t obsluga_wywolan_systemowych(uint64_t nr_funkcji, uint64_t ar
         // i NIGDY tu nie wrócimy. Jeśli kod przejdzie dalej, znaczy to że plik nie istnieje lub jest uszkodzony.
         kod_wyniku = result ? 1 : 0;
         break;
+        }
+
+        case 11: {
+            kod_wyniku = lx_launch_reaper() ? 1 : 0;
+            break;
         }
 
         default: {
